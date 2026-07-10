@@ -27,4 +27,12 @@ set -e
 [[ "$corrupt_rc" -ne 0 ]]
 grep -q 'output hash mismatch' "$tmp/corrupt-error"
 
+set +e
+"$CPU" 0 100 0 1 1 >"$tmp/capacity-output" 2>"$tmp/capacity-error"
+capacity_rc="$?"
+set -e
+[[ "$capacity_rc" -eq 75 ]]
+[[ ! -s "$tmp/capacity-output" ]]
+grep -q '^CAPACITY_ERROR ' "$tmp/capacity-error"
+
 printf 'test_reference=pass\n'

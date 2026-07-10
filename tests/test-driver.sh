@@ -70,4 +70,65 @@ set -e
 [[ ! -s "$tmp/orphan-results" ]]
 grep -q 'uncertified output file present: orphan.out' "$tmp/orphan-errors"
 
-printf 'test_driver=pass\n'
+near_max_run="$tmp/near-max-run"
+near_max_invocations="$tmp/near-max-invocations"
+FAKE_INVOCATION_LOG="$near_max_invocations" SEARCH_RUN_DIR="$near_max_run" SEARCH_BIN="$FAKE" \
+  "$DRIVER" 9223372036854775797 10 10 3 0 20 \
+  >"$tmp/near-max-results" 2>"$tmp/near-max-errors"
+[[ "$(wc -l <"$near_max_invocations" | tr -d '[:space:]')" -eq 3 ]]
+awk -F '\t' '
+  $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $1 < 0 || $2 <= 0 { exit 1 }
+  { total += $2 }
+  END { exit(total == 10 ? 0 : 1) }
+' "$near_max_invocations"
+grep -q '^MANIFEST_OK start=9223372036854775797 count=10 ' "$tmp/near-max-errors"
+
+capacity_run="$tmp/capacity-run"
+capacity_invocations="$tmp/capacity-invocations"
+MATCH_CAPACITY=17 FAKE_INVOCATION_LOG="$capacity_invocations" SEARCH_RUN_DIR="$capacity_run" SEARCH_BIN="$FAKE" \
+  "$DRIVER" 0 19 3 2 7 5 >"$tmp/capacity-first" 2>"$tmp/capacity-first-errors"
+first_capacity_calls="$(wc -l <"$capacity_invocations" | tr -d '[:space:]')"
+awk -F '\t' '$3 != 17 { exit 1 }' "$capacity_invocations"
+awk -F '\t' 'NR > 1 && $12 != 17 { exit 1 }' "$capacity_run/manifest.tsv"
+MATCH_CAPACITY=17 FAKE_INVOCATION_LOG="$capacity_invocations" SEARCH_RUN_DIR="$capacity_run" \
+  SEARCH_RESUME=1 SEARCH_BIN="$FAKE" "$DRIVER" 0 19 3 2 7 5 \
+  >"$tmp/capacity-second" 2>"$tmp/capacity-second-errors"
+[[ "$(wc -l <"$capacity_invocations" | tr -d '[:space:]')" -eq "$first_capacity_calls" ]]
+MATCH_CAPACITY=18 FAKE_INVOCATION_LOG="$capacity_invocations" SEARCH_RUN_DIR="$capacity_run" \
+  SEARCH_RESUME=1 SEARCH_BIN="$FAKE" "$DRIVER" 0 19 3 2 7 5 \
+  >"$tmp/capacity-third" 2>"$tmp/capacity-third-errors"
+[[ "$(wc -l <"$capacity_invocations" | tr -d '[:space:]')" -eq $(( first_capacity_calls * 2 )) ]]
+awk -F '\t' 'NR > 1 && $12 != 18 { exit 1 }' "$capacity_run/manifest.tsv"
+diff -u "$tmp/capacity-first" "$tmp/capacity-third"
+
+set +e
+MATCH_CAPACITY=0 SEARCH_BIN="$FAKE" "$DRIVER" 0 10 2 1 0 20 \
+  >"$tmp/capacity-zero.out" 2>"$tmp/capacity-zero.err"
+capacity_zero_rc="$?"
+MATCH_CAPACITY=4294967296 SEARCH_BIN="$FAKE" "$DRIVER" 0 10 2 1 0 20 \
+  >"$tmp/capacity-large.out" 2>"$tmp/capacity-large.err"
+capacity_large_rc="$?"
+set -e
+[[ "$capacity_zero_rc" -eq 64 && "$capacity_large_rc" -eq 64 ]]
+
+mutable_bin="$tmp/midrun-search.sh"
+cp "$FAKE" "$mutable_bin"
+chmod +x "$mutable_bin"
+before_mutation_sha="$(shasum -a 256 "$mutable_bin" | awk '{print $1}')"
+block_dir="$tmp/midrun-block"
+FAKE_BLOCK_DIR="$block_dir" SEARCH_BIN="$mutable_bin" SEARCH_RUN_DIR="$tmp/midrun" \
+  "$DRIVER" 0 10 10 1 0 20 >"$tmp/midrun.out" 2>"$tmp/midrun.err" &
+midrun_pid="$!"
+tries=0
+while [[ ! -e "$block_dir/ready" && "$tries" -lt 500 ]]; do
+  sleep 0.01
+  tries=$(( tries + 1 ))
+done
+[[ -e "$block_dir/ready" ]]
+printf '\n# source changed while snapshot runs\n' >>"$mutable_bin"
+: >"$block_dir/release"
+wait "$midrun_pid"
+grep -q "$before_mutation_sha" "$tmp/midrun/manifest.tsv"
+grep -q '^MANIFEST_OK ' "$tmp/midrun.err"
+
+printf 'test_driver=pass cases=policy-resume-nearmax-capacity-snapshot\n'

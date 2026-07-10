@@ -58,6 +58,8 @@ search-driver.sh START COUNT [CHUNK] [GPU_COUNT|auto] [SEED] [ZERO_BITS]
 
 The driver emits results only if every assigned chunk completes successfully. Per-device diagnostics are retained until the run finishes and are printed if any worker fails.
 
+Set `MATCH_CAPACITY` in the environment to change the bounded per-chunk match buffer (default `4096`). The value is forwarded to every worker and recorded in each chunk manifest, so changing it invalidates resume metadata.
+
 To retain a verifiable run and resume completed chunks:
 
 ```bash
@@ -71,7 +73,7 @@ SEARCH_RESUME=1 \
   ./scripts/search-driver.sh 0 10000000 500000 auto 12345 20
 ```
 
-Each successful chunk records its exact interval, GPU index, binary hash, output hash, match count, seed, and predicate setting. `scripts/verify-manifest.sh` rejects missing, overlapping, reordered, corrupted, or identity-mismatched chunks before the driver emits merged results.
+Each successful chunk records its exact interval, GPU index, binary hash, output hash, match count, seed, predicate setting, and match capacity. `scripts/verify-manifest.sh` snapshots and validates every certified output, rejects missing, overlapping, reordered, corrupted, out-of-range, or identity-mismatched chunks, and emits merged results only from those verified snapshots.
 
 For portable Bash arithmetic, the driver requires `START` and the exclusive end `START + COUNT` to be within `0..2^63-1`. The CUDA executable uses unsigned 64-bit values.
 
