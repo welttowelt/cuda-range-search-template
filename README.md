@@ -19,7 +19,7 @@ This project contains no network client, credential handling, wallet logic, key 
 - CUDA toolkit with `nvcc`
 - Bash 3.2 or newer
 
-The orchestration tests do not require a GPU.
+The orchestration and CPU-reference tests do not require a GPU.
 
 ## Build
 
@@ -58,6 +58,21 @@ search-driver.sh START COUNT [CHUNK] [GPU_COUNT|auto] [SEED] [ZERO_BITS]
 
 The driver emits results only if every assigned chunk completes successfully. Per-device diagnostics are retained until the run finishes and are printed if any worker fails.
 
+To retain a verifiable run and resume completed chunks:
+
+```bash
+SEARCH_BIN=./build/range-search \
+SEARCH_RUN_DIR=./runs/example \
+  ./scripts/search-driver.sh 0 10000000 500000 auto 12345 20
+
+SEARCH_BIN=./build/range-search \
+SEARCH_RUN_DIR=./runs/example \
+SEARCH_RESUME=1 \
+  ./scripts/search-driver.sh 0 10000000 500000 auto 12345 20
+```
+
+Each successful chunk records its exact interval, GPU index, binary hash, output hash, match count, seed, and predicate setting. `scripts/verify-manifest.sh` rejects missing, overlapping, reordered, corrupted, or identity-mismatched chunks before the driver emits merged results.
+
 For portable Bash arithmetic, the driver accepts ranges within `0..2^63-1`. The CUDA executable uses unsigned 64-bit values.
 
 ## Test without CUDA
@@ -67,6 +82,8 @@ make test
 ```
 
 The tests use a fake search executable to verify exact range coverage, deterministic result merging, invalid-input rejection, and worker-failure propagation.
+
+They also compile a CPU reference executable from the same predicate header and compare a direct CPU search with a differently chunked, three-worker run. This catches scheduler gaps and predicate drift without requiring CUDA.
 
 ## External review
 

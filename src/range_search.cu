@@ -8,6 +8,8 @@
 #include <limits>
 #include <vector>
 
+#include "predicate.hpp"
+
 namespace {
 
 constexpr unsigned int kDefaultCapacity = 4096;
@@ -46,13 +48,6 @@ bool cuda_ok(cudaError_t result, const char* operation) {
     return false;
 }
 
-__device__ __forceinline__ std::uint64_t splitmix64(std::uint64_t value) {
-    value += 0x9e3779b97f4a7c15ULL;
-    value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-    value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
-    return value ^ (value >> 31U);
-}
-
 __global__ void search_range(std::uint64_t start, std::uint64_t count,
                              std::uint64_t seed, unsigned int zero_bits,
                              std::uint64_t* matches,
@@ -62,11 +57,9 @@ __global__ void search_range(std::uint64_t start, std::uint64_t count,
         static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const std::uint64_t stride =
         static_cast<std::uint64_t>(blockDim.x) * gridDim.x;
-    const std::uint64_t mask = (1ULL << zero_bits) - 1ULL;
-
     for (std::uint64_t offset = first; offset < count; offset += stride) {
         const std::uint64_t candidate = start + offset;
-        if ((splitmix64(candidate ^ seed) & mask) == 0ULL) {
+        if (range_search::matches(candidate, seed, zero_bits)) {
             const unsigned long long slot = atomicAdd(match_count, 1ULL);
             if (slot < capacity) {
                 matches[slot] = candidate;

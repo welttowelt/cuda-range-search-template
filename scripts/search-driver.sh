@@ -57,6 +57,9 @@ gpu_count="${4:-auto}"
 seed="$(normalize_uint "${5:-0}")"
 zero_bits="$(normalize_uint "${6:-20}")"
 search_bin="${SEARCH_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/range-search}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+verifier="$root/scripts/verify-manifest.sh"
+resume="${SEARCH_RESUME:-0}"
 
 for value in "$start" "$count" "$chunk" "$seed"; do
   is_i63 "$value" || {
@@ -80,6 +83,18 @@ is_uint "$zero_bits" || {
   printf 'INPUT_ERROR: search executable is missing or not executable: %s\n' "$search_bin" >&2
   exit 66
 }
+[[ "$resume" == 0 || "$resume" == 1 ]] || {
+  printf 'INPUT_ERROR: SEARCH_RESUME must be 0 or 1\n' >&2
+  exit 64
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
 
 if [[ "$gpu_count" == auto ]]; then
   command -v nvidia-smi >/dev/null 2>&1 || {
@@ -93,11 +108,53 @@ is_uint "$gpu_count" && (( gpu_count >= 1 )) || {
   exit 64
 }
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+ephemeral=0
+if [[ -n "${SEARCH_RUN_DIR:-}" ]]; then
+  run_dir="$SEARCH_RUN_DIR"
+  mkdir -p "$run_dir"
+else
+  run_dir="$(mktemp -d)"
+  ephemeral=1
+fi
+chunks_dir="$run_dir/chunks"
+mkdir -p "$chunks_dir"
+if [[ "$resume" == 0 ]] && find "$chunks_dir" -type f -name '*.tsv' -print | grep -q .; then
+  printf 'INPUT_ERROR: run directory already has chunks; use SEARCH_RESUME=1 or a new directory\n' >&2
+  exit 64
+fi
+if ! mkdir "$run_dir/.lock" 2>/dev/null; then
+  printf 'INPUT_ERROR: run directory is already locked: %s\n' "$run_dir" >&2
+  exit 73
+fi
+cleanup() {
+  rmdir "$run_dir/.lock" 2>/dev/null || true
+  if [[ "$ephemeral" == 1 ]]; then
+    rm -rf "$run_dir"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+binary_sha="$(sha256_file "$search_bin")"
 per_device=$(( (count + gpu_count - 1) / gpu_count ))
 pids=""
 workers=0
+
+chunk_complete() {
+  local metadata="$1" expected_chunk_start="$2" expected_chunk_count="$3"
+  local chunk_start chunk_count_value chunk_end meta_seed meta_bits gpu meta_binary_sha
+  local output_sha matches status output_name extra output
+  [[ -f "$metadata" ]] || return 1
+  IFS=$'\t' read -r chunk_start chunk_count_value chunk_end meta_seed meta_bits gpu \
+    meta_binary_sha output_sha matches status output_name extra <"$metadata"
+  [[ -z "${extra:-}" && "$chunk_start" == "$expected_chunk_start" && \
+     "$chunk_count_value" == "$expected_chunk_count" && \
+     "$chunk_end" == "$((expected_chunk_start + expected_chunk_count))" && \
+     "$meta_seed" == "$seed" && "$meta_bits" == "$zero_bits" && \
+     "$meta_binary_sha" == "$binary_sha" && "$status" == complete && \
+     "$output_name" == "${expected_chunk_start}-${expected_chunk_count}.out" ]] || return 1
+  output="$chunks_dir/$output_name"
+  [[ -f "$output" && "$(sha256_file "$output")" == "$output_sha" ]]
+}
 
 for ((gpu = 0; gpu < gpu_count; gpu++)); do
   device_start=$(( start + gpu * per_device ))
@@ -109,10 +166,8 @@ for ((gpu = 0; gpu < gpu_count; gpu++)); do
   if (( device_start + device_count > end )); then
     device_count=$(( end - device_start ))
   fi
-  out="$tmp/gpu-${gpu}.out"
-  err="$tmp/gpu-${gpu}.err"
+  err="$run_dir/gpu-${gpu}.err"
   (
-    : >"$out"
     : >"$err"
     offset=0
     while (( offset < device_count )); do
@@ -121,10 +176,20 @@ for ((gpu = 0; gpu < gpu_count; gpu++)); do
         current_count=$(( device_count - offset ))
       fi
       current_start=$(( device_start + offset ))
+      output_name="${current_start}-${current_count}.out"
+      out="$chunks_dir/$output_name"
+      metadata="$chunks_dir/${current_start}-${current_count}.tsv"
+      if [[ "$resume" == 1 ]] && chunk_complete "$metadata" "$current_start" "$current_count"; then
+        printf 'RESUME_OK gpu=%s start=%s count=%s\n' \
+          "$gpu" "$current_start" "$current_count" >>"$err"
+        offset=$(( offset + current_count ))
+        continue
+      fi
+      rm -f "$metadata" "$out.part" "$metadata.part"
       set +e
       CUDA_VISIBLE_DEVICES="$gpu" "$search_bin" \
         "$current_start" "$current_count" "$seed" "$zero_bits" \
-        >>"$out" 2>>"$err"
+        >"$out.part" 2>>"$err"
       rc="$?"
       set -e
       if (( rc != 0 )); then
@@ -132,6 +197,15 @@ for ((gpu = 0; gpu < gpu_count; gpu++)); do
           "$gpu" "$current_start" "$current_count" "$rc" >>"$err"
         exit 70
       fi
+      sort -t= -k2,2n -u "$out.part" >"$out"
+      rm -f "$out.part"
+      output_sha="$(sha256_file "$out")"
+      matches="$(grep -c '^MATCH value=' "$out" 2>/dev/null || true)"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcomplete\t%s\n' \
+        "$current_start" "$current_count" "$((current_start + current_count))" \
+        "$seed" "$zero_bits" "$gpu" "$binary_sha" "$output_sha" "$matches" \
+        "$output_name" >"$metadata.part"
+      mv "$metadata.part" "$metadata"
       offset=$(( offset + current_count ))
     done
   ) &
@@ -148,12 +222,13 @@ done
 
 if (( status != 0 )); then
   printf 'SEARCH_FAILED: at least one GPU worker failed; results suppressed\n' >&2
-  for err in "$tmp"/*.err; do
+  for err in "$run_dir"/*.err; do
     [[ -s "$err" ]] && cat "$err" >&2
   done
   exit "$status"
 fi
 
-cat "$tmp"/*.out 2>/dev/null | sort -u
-printf 'COVERAGE_OK start=%s count=%s workers=%s chunk=%s\n' \
-  "$start" "$count" "$workers" "$chunk" >&2
+"$verifier" "$run_dir" "$start" "$count" "$seed" "$zero_bits" "$binary_sha" >&2
+cat "$chunks_dir"/*.out 2>/dev/null | sort -t= -k2,2n -u
+printf 'COVERAGE_OK start=%s count=%s workers=%s chunk=%s run_dir=%s\n' \
+  "$start" "$count" "$workers" "$chunk" "$run_dir" >&2
