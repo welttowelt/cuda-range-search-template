@@ -81,13 +81,13 @@ For portable Bash arithmetic, the driver accepts ranges within `0..2^63-1`. The 
 make test
 ```
 
-The tests use a fake search executable to verify exact range coverage, deterministic result merging, invalid-input rejection, and worker-failure propagation.
+The tests use a fake search executable to verify exact range coverage, deterministic result merging, invalid-input rejection, and worker-failure propagation. A deterministic 24-case parameter matrix compares partitioned execution with the CPU reference, and an adversarial suite corrupts manifests, outputs, binary identity, and resume state.
 
 They also compile a CPU reference executable from the same predicate header and compare a direct CPU search with a differently chunked, three-worker run. This catches scheduler gaps and predicate drift without requiring CUDA.
 
 ## External review
 
-See [REVIEW_GUIDE.md](REVIEW_GUIDE.md) for a compact checklist suitable for another engineer or LLM reviewer.
+See [REVIEW_GUIDE.md](REVIEW_GUIDE.md) for the review questions and [EXTERNAL_REVIEW_TEMPLATE.md](EXTERNAL_REVIEW_TEMPLATE.md) for a structured response format suitable for another engineer or LLM reviewer.
 
 ## Safety boundary
 

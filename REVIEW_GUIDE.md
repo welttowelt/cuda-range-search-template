@@ -14,4 +14,4 @@ Please review this repository as a generic CUDA systems example. The most useful
 10. Can a malformed, duplicated, missing, or out-of-order chunk metadata file pass `verify-manifest.sh`?
 11. Do the CPU and CUDA implementations actually compile the same predicate definition?
 
-Please return findings with severity, file and line, impact, and a concrete fix. Distinguish verified defects from suggestions and from items that require real-GPU testing.
+Please return findings using [EXTERNAL_REVIEW_TEMPLATE.md](EXTERNAL_REVIEW_TEMPLATE.md). Include severity, file and line, evidence, impact, a concrete fix, and a regression test. Distinguish confirmed defects from suggestions, CPU-tested behavior, and items that require real-GPU testing.
