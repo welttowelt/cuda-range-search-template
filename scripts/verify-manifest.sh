@@ -31,7 +31,8 @@ sha256_file() {
 sorted="$(mktemp)"
 normalized="$(mktemp)"
 records="$(mktemp)"
-trap 'rm -f "$sorted" "$normalized" "$records"' EXIT INT TERM
+certified_outputs="$(mktemp)"
+trap 'rm -f "$sorted" "$normalized" "$records" "$certified_outputs"' EXIT INT TERM
 find "$chunks_dir" -maxdepth 1 -type f -name '*.tsv' -print | sort >"$sorted"
 [[ -s "$sorted" ]] || {
   printf 'MANIFEST_ERROR no chunk metadata found\n' >&2
@@ -43,6 +44,7 @@ expected_end=$(( expected_start + expected_count ))
 total_matches=0
 chunk_count=0
 : >"$normalized"
+: >"$certified_outputs"
 while IFS= read -r metadata; do
   cat "$metadata"
 done <"$sorted" | sort -t $'\t' -k1,1n >"$records"
@@ -99,6 +101,7 @@ while IFS=$'\t' read -r chunk_start chunk_count_value chunk_end seed bits gpu \
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$chunk_start" "$chunk_count_value" "$chunk_end" "$seed" "$bits" "$gpu" \
     "$binary_sha" "$output_sha" "$matches" "$status" "$output_name" >>"$normalized"
+  printf '%s\n' "$output_name" >>"$certified_outputs"
   cursor="$chunk_end"
   total_matches=$(( total_matches + matches ))
   chunk_count=$(( chunk_count + 1 ))
@@ -109,6 +112,14 @@ done <"$records"
     "$expected_end" "$cursor" >&2
   exit 75
 }
+
+while IFS= read -r output; do
+  output_name="${output##*/}"
+  if ! grep -Fqx "$output_name" "$certified_outputs"; then
+    printf 'MANIFEST_ERROR uncertified output file present: %s\n' "$output_name" >&2
+    exit 75
+  fi
+done < <(find "$chunks_dir" -maxdepth 1 -type f -name '*.out' -print | sort)
 
 {
   printf 'start\tcount\tend\tseed\tzero_bits\tgpu\tbinary_sha256\toutput_sha256\tmatches\tstatus\toutput\n'

@@ -75,8 +75,8 @@ is_uint "$zero_bits" || {
   printf 'INPUT_ERROR: COUNT and CHUNK must be positive; ZERO_BITS must be 1..63\n' >&2
   exit 64
 }
-(( count - 1 <= 9223372036854775807 - start )) || {
-  printf 'INPUT_ERROR: range exceeds 2^63-1\n' >&2
+(( count <= 9223372036854775807 - start )) || {
+  printf 'INPUT_ERROR: range exclusive end exceeds 2^63-1\n' >&2
   exit 64
 }
 [[ -x "$search_bin" ]] || {
@@ -124,6 +124,7 @@ if [[ "$resume" == 0 ]] && find "$chunks_dir" -type f -name '*.tsv' -print | gre
 fi
 if ! mkdir "$run_dir/.lock" 2>/dev/null; then
   printf 'INPUT_ERROR: run directory is already locked: %s\n' "$run_dir" >&2
+  printf 'RECOVERY: after confirming no search process owns it, remove %s/.lock and retry\n' "$run_dir" >&2
   exit 73
 fi
 cleanup() {
@@ -135,7 +136,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 binary_sha="$(sha256_file "$search_bin")"
-per_device=$(( (count + gpu_count - 1) / gpu_count ))
+per_device=$(( count / gpu_count ))
+if (( count % gpu_count != 0 )); then
+  per_device=$(( per_device + 1 ))
+fi
 pids=""
 workers=0
 
@@ -229,6 +233,10 @@ if (( status != 0 )); then
 fi
 
 "$verifier" "$run_dir" "$start" "$count" "$seed" "$zero_bits" "$binary_sha" >&2
-cat "$chunks_dir"/*.out 2>/dev/null | sort -t= -k2,2n -u
+while IFS=$'\t' read -r _start _count _end _seed _bits _gpu _binary_sha \
+  _output_sha _matches _status output_name; do
+  [[ "$output_name" == output ]] && continue
+  cat "$chunks_dir/$output_name"
+done <"$run_dir/manifest.tsv" | sort -t= -k2,2n -u
 printf 'COVERAGE_OK start=%s count=%s workers=%s chunk=%s run_dir=%s\n' \
   "$start" "$count" "$workers" "$chunk" "$run_dir" >&2

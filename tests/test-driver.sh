@@ -35,7 +35,16 @@ SEARCH_BIN="$FAKE" "$DRIVER" 9223372036854775807 2 1 1 0 20 \
 overflow_rc="$?"
 set -e
 [[ "$overflow_rc" -eq 64 ]]
-grep -q 'range exceeds' "$tmp/overflow-errors"
+grep -q 'range exclusive end exceeds' "$tmp/overflow-errors"
+
+set +e
+SEARCH_BIN="$FAKE" "$DRIVER" 1 9223372036854775807 1 4 0 20 \
+  >"$tmp/end-overflow-results" 2>"$tmp/end-overflow-errors"
+end_overflow_rc="$?"
+set -e
+[[ "$end_overflow_rc" -eq 64 ]]
+[[ ! -s "$tmp/end-overflow-results" ]]
+grep -q 'range exclusive end exceeds' "$tmp/end-overflow-errors"
 
 run_dir="$tmp/resume-run"
 invocations="$tmp/invocations"
@@ -50,5 +59,15 @@ second_invocations="$(wc -l <"$invocations" | tr -d '[:space:]')"
 diff -u "$tmp/resume-first" "$tmp/resume-second"
 grep -q 'RESUME_OK' "$run_dir/gpu-0.err"
 grep -q '^start[[:space:]]count[[:space:]]end' "$run_dir/manifest.tsv"
+
+printf 'MATCH value=123456789\n' >"$run_dir/chunks/orphan.out"
+set +e
+SEARCH_RUN_DIR="$run_dir" SEARCH_RESUME=1 SEARCH_BIN="$FAKE" \
+  "$DRIVER" 0 10 2 2 0 20 >"$tmp/orphan-results" 2>"$tmp/orphan-errors"
+orphan_rc="$?"
+set -e
+[[ "$orphan_rc" -eq 75 ]]
+[[ ! -s "$tmp/orphan-results" ]]
+grep -q 'uncertified output file present: orphan.out' "$tmp/orphan-errors"
 
 printf 'test_driver=pass\n'

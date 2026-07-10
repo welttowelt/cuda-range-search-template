@@ -73,7 +73,7 @@ SEARCH_RESUME=1 \
 
 Each successful chunk records its exact interval, GPU index, binary hash, output hash, match count, seed, and predicate setting. `scripts/verify-manifest.sh` rejects missing, overlapping, reordered, corrupted, or identity-mismatched chunks before the driver emits merged results.
 
-For portable Bash arithmetic, the driver accepts ranges within `0..2^63-1`. The CUDA executable uses unsigned 64-bit values.
+For portable Bash arithmetic, the driver requires `START` and the exclusive end `START + COUNT` to be within `0..2^63-1`. The CUDA executable uses unsigned 64-bit values.
 
 ## Test without CUDA
 
